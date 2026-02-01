@@ -3,16 +3,10 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
-
--- SERVER HOP SETTINGS
-local AUTO_SERVER_HOP = true
-local SERVER_HOP_DELAY = 60
-local LastServerHop = 0
 
 -- LOAD GUARD
 if getgenv().AutoKillLoaded then return end
@@ -20,43 +14,42 @@ getgenv().AutoKillLoaded = true
 
 -- STATE
 local Character, Humanoid, Hand, Punch
-local Running = true
-local StartTime = os.time()
+local Running = false
 
--- KILL STATS
+-- SETTINGS (UI controlled)
+local AUTO_KILL = false
+local AUTO_SERVER_HOP = false
+local SERVER_HOP_DELAY = 60
+local LastServerHop = 0
+local KillOnlyWeaker = true
+local WhitelistFriends = true
+
+-- STATS
 local TotalKills = 0
 local SessionStartTime = os.clock()
 
--- SETTINGS
-local WhitelistFriends = true
-local KillOnlyWeaker = true
+getgenv().WhitelistedPlayers = {}
 
-getgenv().WhitelistedPlayers = getgenv().WhitelistedPlayers or {}
+-- ======================
+-- UTILS
+-- ======================
 
--- SERVER HOP
-local function ServerHop()
-    local servers = {}
-    local cursor = ""
-
-    repeat
-        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?limit=100"
-        if cursor ~= "" then url ..="&cursor="..cursor end
-
-        local data = HttpService:JSONDecode(game:HttpGet(url))
-        for _, s in ipairs(data.data) do
-            if s.playing < s.maxPlayers and s.id ~= game.JobId then
-                table.insert(servers, s.id)
-            end
-        end
-        cursor = data.nextPageCursor or ""
-    until cursor == "" or #servers > 0
-
-    if #servers > 0 then
-        TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(#servers)], LocalPlayer)
+local function UpdateChar()
+    Character = LocalPlayer.Character
+    if Character then
+        Humanoid = Character:FindFirstChildOfClass("Humanoid")
+        Hand = Character:FindFirstChild("LeftHand") or Character:FindFirstChild("Left Arm")
+        Punch = Character:FindFirstChild("Punch")
     end
 end
+UpdateChar()
+LocalPlayer.CharacterAdded:Connect(UpdateChar)
 
--- DAMAGE
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+end)
+
 local function GetLocalDamage()
     local stats = LocalPlayer:FindFirstChild("leaderstats")
     if stats then
@@ -75,65 +68,102 @@ local function CanKill(p)
     return math.ceil(h.MaxHealth / GetLocalDamage()) <= 5
 end
 
--- UPDATE CHAR
-local function UpdateChar()
-    Character = LocalPlayer.Character
-    if Character then
-        Humanoid = Character:FindFirstChildOfClass("Humanoid")
-        Hand = Character:FindFirstChild("LeftHand") or Character:FindFirstChild("Left Arm")
-        Punch = Character:FindFirstChild("Punch")
+-- ======================
+-- SERVER HOP
+-- ======================
+local function ServerHop()
+    local servers, cursor = {}, ""
+    repeat
+        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?limit=100"
+        if cursor ~= "" then url ..="&cursor="..cursor end
+        local data = HttpService:JSONDecode(game:HttpGet(url))
+        for _, s in ipairs(data.data) do
+            if s.playing < s.maxPlayers and s.id ~= game.JobId then
+                table.insert(servers, s.id)
+            end
+        end
+        cursor = data.nextPageCursor or ""
+    until cursor == "" or #servers > 0
+
+    if #servers > 0 then
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, servers[math.random(#servers)], LocalPlayer)
     end
 end
 
-UpdateChar()
-LocalPlayer.CharacterAdded:Connect(UpdateChar)
-
--- ANTI AFK
-LocalPlayer.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
-end)
-
--- GUI
+-- ======================
+-- SIMPLE UI
+-- ======================
 local Screen = Instance.new("ScreenGui", game.CoreGui)
 Screen.ResetOnSpawn = false
 
 local Main = Instance.new("Frame", Screen)
-Main.Size = UDim2.new(0,180,0,190)
-Main.Position = UDim2.new(0.5,-90,0.1,0)
-Main.BackgroundColor3 = Color3.fromRGB(20,20,20)
+Main.Size = UDim2.new(0,200,0,240)
+Main.Position = UDim2.new(0.5,-100,0.15,0)
+Main.BackgroundColor3 = Color3.fromRGB(25,25,25)
+Main.BorderSizePixel = 0
 
 local Title = Instance.new("TextLabel", Main)
-Title.Size = UDim2.new(1,0,0,22)
+Title.Size = UDim2.new(1,0,0,24)
 Title.BackgroundTransparency = 1
 Title.Font = Enum.Font.Code
+Title.Text = "Auto Kill UI"
 Title.TextColor3 = Color3.new(1,1,1)
-Title.TextSize = 13
-Title.Text = "Auto Kill Control"
+Title.TextSize = 14
 
-local AvgLabel = Instance.new("TextLabel", Main)
-AvgLabel.Position = UDim2.new(0,8,0,30)
-AvgLabel.Size = UDim2.new(1,-10,0,18)
-AvgLabel.BackgroundTransparency = 1
-AvgLabel.Font = Enum.Font.Code
-AvgLabel.TextColor3 = Color3.new(1,1,1)
-AvgLabel.TextSize = 13
-AvgLabel.TextXAlignment = Left
-AvgLabel.Text = "avg: 0.00 / min"
+local function MakeButton(text, y)
+    local b = Instance.new("TextButton", Main)
+    b.Size = UDim2.new(1,-16,0,20)
+    b.Position = UDim2.new(0,8,0,y)
+    b.BackgroundColor3 = Color3.fromRGB(35,35,35)
+    b.Font = Enum.Font.Code
+    b.TextSize = 13
+    b.TextColor3 = Color3.new(1,1,1)
+    b.Text = text
+    return b
+end
 
-local StartBtn = Instance.new("TextButton", Main)
-StartBtn.Position = UDim2.new(0,8,0,60)
-StartBtn.Size = UDim2.new(0,78,0,18)
-StartBtn.Text = "Start"
-StartBtn.Font = Enum.Font.Code
+local AutoKillBtn   = MakeButton("Auto Kill: OFF", 32)
+local ServerHopBtn  = MakeButton("Server Hop: OFF", 56)
+local WeakerBtn     = MakeButton("Kill Weaker Only: ON", 80)
+local FriendBtn     = MakeButton("Whitelist Friends: ON", 104)
+
+local StartBtn = MakeButton("START", 136)
 StartBtn.TextColor3 = Color3.fromRGB(0,255,0)
 
-local StopBtn = Instance.new("TextButton", Main)
-StopBtn.Position = UDim2.new(0,94,0,60)
-StopBtn.Size = UDim2.new(0,78,0,18)
-StopBtn.Text = "Stop"
-StopBtn.Font = Enum.Font.Code
+local StopBtn = MakeButton("STOP", 160)
 StopBtn.TextColor3 = Color3.fromRGB(255,0,0)
+
+local AvgLabel = Instance.new("TextLabel", Main)
+AvgLabel.Position = UDim2.new(0,8,0,192)
+AvgLabel.Size = UDim2.new(1,-16,0,20)
+AvgLabel.BackgroundTransparency = 1
+AvgLabel.Font = Enum.Font.Code
+AvgLabel.TextSize = 13
+AvgLabel.TextColor3 = Color3.new(1,1,1)
+AvgLabel.Text = "avg: 0.00 / min"
+
+-- ======================
+-- BUTTON LOGIC
+-- ======================
+AutoKillBtn.MouseButton1Click:Connect(function()
+    AUTO_KILL = not AUTO_KILL
+    AutoKillBtn.Text = "Auto Kill: " .. (AUTO_KILL and "ON" or "OFF")
+end)
+
+ServerHopBtn.MouseButton1Click:Connect(function()
+    AUTO_SERVER_HOP = not AUTO_SERVER_HOP
+    ServerHopBtn.Text = "Server Hop: " .. (AUTO_SERVER_HOP and "ON" or "OFF")
+end)
+
+WeakerBtn.MouseButton1Click:Connect(function()
+    KillOnlyWeaker = not KillOnlyWeaker
+    WeakerBtn.Text = "Kill Weaker Only: " .. (KillOnlyWeaker and "ON" or "OFF")
+end)
+
+FriendBtn.MouseButton1Click:Connect(function()
+    WhitelistFriends = not WhitelistFriends
+    FriendBtn.Text = "Whitelist Friends: " .. (WhitelistFriends and "ON" or "OFF")
+end)
 
 StartBtn.MouseButton1Click:Connect(function()
     Running = true
@@ -145,16 +175,19 @@ StopBtn.MouseButton1Click:Connect(function()
     Running = false
 end)
 
+-- ======================
 -- MAIN LOOP
+-- ======================
 RunService.RenderStepped:Connect(function()
     if not Running then return end
 
-    -- AUTO SERVER HOP
     if AUTO_SERVER_HOP and os.clock() - LastServerHop >= SERVER_HOP_DELAY then
         LastServerHop = os.clock()
         ServerHop()
         return
     end
+
+    if not AUTO_KILL then return end
 
     UpdateChar()
     if not Character or not Humanoid or not Hand then return end
@@ -188,10 +221,8 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- AVG RATE
     local elapsed = os.clock() - SessionStartTime
     if elapsed > 1 then
-        local avg = TotalKills / (elapsed / 60)
-        AvgLabel.Text = string.format("avg: %.2f / min", avg)
+        AvgLabel.Text = string.format("avg: %.2f / min", TotalKills / (elapsed / 60))
     end
 end)
