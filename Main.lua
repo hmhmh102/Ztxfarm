@@ -620,4 +620,4 @@ local function gettool()
 end
 
 local function isPlayerAlive(player)
-    return player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") 
+    return player and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
