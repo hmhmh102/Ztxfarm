@@ -1,451 +1,171 @@
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local VirtualUser = game:GetService("VirtualUser")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local LocalPlayer = Players.LocalPlayer
-
-if getgenv().AutoKillLoaded then
-    return
-end
-getgenv().AutoKillLoaded = true
-
-local Character, Humanoid, Hand, Punch, Animator
-local LastAttack, LastRespawn, LastCheck = 0, 0, 0
-local Running = true
-local StartTime = os.time()
-local WhitelistFriends = true
-local KillOnlyWeaker = true
-
-if getgenv().AutoStartEnabled then
-    Running = true
+local library
+if _G.scpLibrary then
+    library = _G.scpLibrary
+else
+    library = loadstring(game:HttpGet("https://raw.githubusercontent.com/imhenne187/SilenceElerium/refs/heads/main/src/SilenceEleriumLibrary.luau", true))()
+    _G.scpLibrary = library
 end
 
-getgenv().WhitelistedPlayers = getgenv().WhitelistedPlayers or {}
-getgenv().TempWhitelistStronger = getgenv().TempWhitelistStronger or {}
-
-local BlockedAnimations = {
-    ["rbxassetid://3638729053"] = true,
-    ["rbxassetid://3638749874"] = true,
-    ["rbxassetid://3638767427"] = true,
-    ["rbxassetid://102357151005774"] = true
-}
-
-for _, obj in pairs(ReplicatedStorage:GetChildren()) do
-    if obj.Name:match("Frame$") then
-        obj.Visible = false
-    end
-end
-
-local function GetPlayerStatValue(Player, StatNames)
-    if not Player then return nil end
-    if type(StatNames) == "string" then StatNames = {StatNames} end
-    for _, Name in ipairs(StatNames) do
-        local Attr
-        if typeof(Player.GetAttribute) == "function" then
-            Attr = Player:GetAttribute(Name)
+-- SCP LOGO INJECTOR
+local injectSCPLogo = _G.injectSCPLogo or function(wFrame)
+    task.spawn(function()
+        -- Wait up to 3 seconds for Bar to exist
+        local bar
+        for i=1,60 do
+            bar = wFrame:FindFirstChild("Bar")
+            if bar then break end
+            task.wait(0.05)
         end
-        if Attr ~= nil then return tonumber(Attr) end
-    end
-    local Leaderstats = Player:FindFirstChild("leaderstats")
-    if Leaderstats then
-        for _, Name in ipairs(StatNames) do
-            local V = Leaderstats:FindFirstChild(Name)
-            if V and V.Value ~= nil then return tonumber(V.Value) end
+        if not bar then return end
+        local tog
+        for i=1,20 do
+            tog = bar:FindFirstChild("Toggle")
+            if tog then break end
+            task.wait(0.05)
         end
-    end
-    if Player.Character then
-        for _, Name in ipairs(StatNames) do
-            local V = Player.Character:FindFirstChild(Name)
-            if V and V.Value ~= nil then return tonumber(V.Value) end
-        end
-    end
-    return nil
-end
-
-local function GetLocalPlayerDamage()
-    return GetPlayerStatValue(LocalPlayer, {"Damage","DMG","Attack","Strength","Str"}) or 1
-end
-
-local function GetTargetHealth(Player)
-    if Player.Character and Player.Character:FindFirstChild("Humanoid") then
-        return Player.Character.Humanoid.MaxHealth
-    end
-    return 100
-end
-
-local function UpdateWhitelist()
-    if WhitelistFriends then
-        for _, targetPlayer in ipairs(Players:GetPlayers()) do
-            if targetPlayer ~= LocalPlayer and targetPlayer:IsFriendsWith(LocalPlayer.UserId) then
-                local playerName = targetPlayer.Name
-                local alreadyWhitelisted = false
-                for _, name in ipairs(getgenv().WhitelistedPlayers) do
-                    if name:lower() == playerName:lower() then
-                        alreadyWhitelisted = true
-                        break
-                    end
-                end
-                if not alreadyWhitelisted then
-                    table.insert(getgenv().WhitelistedPlayers, playerName)
-                end
-            end
-        end
-    else
-        for _, targetPlayer in ipairs(Players:GetPlayers()) do
-            if targetPlayer ~= LocalPlayer and targetPlayer:IsFriendsWith(LocalPlayer.UserId) then
-                local playerName = targetPlayer.Name
-                for i = #getgenv().WhitelistedPlayers, 1, -1 do
-                    if getgenv().WhitelistedPlayers[i]:lower() == playerName:lower() then
-                        table.remove(getgenv().WhitelistedPlayers, i)
-                    end
-                end
-            end
-        end
-    end
-end
-
-local function IsWhitelisted(player)
-    if not WhitelistFriends then return false end
-    for _, name in ipairs(getgenv().WhitelistedPlayers) do
-        if name:lower() == player.Name:lower() then
-            return true
-        end
-    end
-    return false
-end
-
-local function IsTempWhitelisted(player)
-    for _, name in ipairs(getgenv().TempWhitelistStronger) do
-        if name:lower() == player.Name:lower() then
-            return true
-        end
-    end
-    return false
-end
-
-local function ShouldKillPlayer(player)
-    if not KillOnlyWeaker then return true end
-    if IsTempWhitelisted(player) then return false end
-    local MyDamage = GetLocalPlayerDamage()
-    local Health = GetTargetHealth(player)
-    if Health and MyDamage and MyDamage > 0 then
-        local HitsNeeded = math.ceil(Health / MyDamage)
-        if HitsNeeded > 5 then
-            local AlreadyWhitelisted = false
-            for _, Name in ipairs(getgenv().TempWhitelistStronger) do
-                if Name:lower() == player.Name:lower() then
-                    AlreadyWhitelisted = true
-                    break
-                end
-            end
-            if not AlreadyWhitelisted then
-                table.insert(getgenv().TempWhitelistStronger, player.Name)
-            end
-            return false
-        end
-        return true
-    end
-    return true
-end
-
-local function UpdateAll()
-    Character = LocalPlayer.Character
-    if Character then
-        Humanoid = Character:FindFirstChildOfClass("Humanoid")
-        Hand = Character:FindFirstChild("LeftHand") or Character:FindFirstChild("Left Arm")
-        Animator = Humanoid and (Character:FindFirstChildOfClass("Animator") or Humanoid:FindFirstChildOfClass("Animator"))
-        Punch = Character:FindFirstChild("Punch")
-    else
-        Character, Humanoid, Hand, Animator, Punch = nil, nil, nil, nil, nil
-    end
-end
-
-local function UpdateAntiKnockback()
-    local RootPart = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if RootPart and not getgenv().AntiKnockbackVelocity then
-        getgenv().AntiKnockbackVelocity = Instance.new("BodyVelocity")
-        getgenv().AntiKnockbackVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-        getgenv().AntiKnockbackVelocity.Velocity = Vector3.new(0, 0, 0)
-        getgenv().AntiKnockbackVelocity.P = 1250
-        getgenv().AntiKnockbackVelocity.Parent = RootPart
-    end
-end
-
-LocalPlayer.CharacterAdded:Connect(function()
-    UpdateAll()
-    task.wait(1)
-    UpdateAntiKnockback()
-end)
-Players.PlayerAdded:Connect(function()
-    UpdateWhitelist()
-    getgenv().TempWhitelistStronger = {}
-end)
-Players.PlayerRemoving:Connect(function(player)
-    for i = #getgenv().TempWhitelistStronger, 1, -1 do
-        if getgenv().TempWhitelistStronger[i]:lower() == player.Name:lower() then
-            table.remove(getgenv().TempWhitelistStronger, i)
-        end
-    end
-end)
-UpdateAll()
-UpdateAntiKnockback()
-UpdateWhitelist()
-
-if not getgenv().AnimBlockConnection then
-    getgenv().AnimBlockConnection = RunService.RenderStepped:Connect(function()
-        if Character and Humanoid then
-            for _, Track in ipairs(Humanoid:GetPlayingAnimationTracks()) do
-                if Track.Animation then
-                    local AnimId = Track.Animation.AnimationId
-                    local AnimName = Track.Name:lower()
-                    if BlockedAnimations[AnimId] or AnimName:match("punch") or AnimName:match("attack") then
-                        Track:Stop()
-                    end
-                end
-            end
-        end
+        if not tog then return end
+        pcall(function()
+            tog.Image="rbxassetid://3926305904"
+            tog.ImageColor3=Color3.fromRGB(180,80,255)
+            tog.Size=UDim2.new(0,18,0,18)
+            local ex=bar:FindFirstChild("SCPLogo"); if ex then ex:Destroy() end
+            local lbl=Instance.new("TextLabel")
+            lbl.Name="SCPLogo"; lbl.Size=UDim2.new(0,32,0,14)
+            lbl.Position=UDim2.new(0,22,0,2); lbl.BackgroundTransparency=1
+            lbl.Text="SCP"; lbl.TextColor3=Color3.fromRGB(160,60,240)
+            lbl.TextSize=11; lbl.Font=Enum.Font.FredokaOne
+            lbl.ZIndex=tog.ZIndex+1; lbl.Parent=bar
+        end)
     end)
 end
 
-RunService.RenderStepped:Connect(function()
-    if not Running then return end
-    local TimeNow = os.clock()
-    if TimeNow - LastAttack < 0.05 then return end
-    LastAttack = TimeNow
-    if not Character or not Humanoid or TimeNow - LastCheck > 1 then
-        UpdateAll()
-        LastCheck = TimeNow
-        if not Character or not Humanoid then return end
-    end
-    if not Hand then
-        Hand = Character:FindFirstChild("LeftHand") or Character:FindFirstChild("Left Arm")
-        if not Hand then return end
-    end
-    if not Punch or not Punch.Parent then
-        Punch = Character:FindFirstChild("Punch")
-        if not Punch then
-            local Tool = LocalPlayer.Backpack:FindFirstChild("Punch")
-            if Tool then
-                Humanoid:EquipTool(Tool)
-                Punch = Character:FindFirstChild("Punch")
-            else
-                if TimeNow - LastRespawn > 3 and Humanoid and Humanoid.Health > 0 then
-                    Humanoid.Health = 0
-                    LastRespawn = TimeNow
-                end
-                return
-            end
-        end
-    end
-    if Punch and Punch.Parent then
-        Punch.attackTime.Value = 0
-        Punch:Activate()
-        for _, Player in ipairs(Players:GetPlayers()) do
-            if Player ~= LocalPlayer and not IsWhitelisted(Player) and ShouldKillPlayer(Player) then
-                local Character2 = Player.Character
-                if Character2 and Character2.Parent then
-                    local Humanoid2 = Character2:FindFirstChildOfClass("Humanoid")
-                    local Head = Character2:FindFirstChild("Head")
-                    local RootPart = Character2:FindFirstChild("HumanoidRootPart")
-                    if Humanoid2 and Head and RootPart and Humanoid2.Health > 0 then
-                        local WasAnchored = RootPart.Anchored
-                        RootPart.Anchored = true
-                        firetouchinterest(Head, Hand, 0)
-                        firetouchinterest(Head, Hand, 1)
-                        RootPart.Anchored = WasAnchored
-                    end
-                end
-            end
-        end
-    end
+local Players=game:GetService("Players"); local RunSvc=game:GetService("RunService")
+local UIS=game:GetService("UserInputService"); local SG=game:GetService("StarterGui")
+local LP=Players.LocalPlayer
+repeat task.wait() until LP and LP.Character
+local function notify(t,m,d) pcall(function() SG:SetCore("SendNotification",{Title=t,Text=m,Duration=d or 3}) end) end
+local function findPlayer(q) if not q or q==""then return LP end; local l=q:lower(); for _,p in ipairs(Players:GetPlayers())do if p.Name:lower()==l or p.DisplayName:lower()==l then return p end end; for _,p in ipairs(Players:GetPlayers())do if p.Name:lower():find(l,1,true)then return p end end end
+
+local KEY_URL="https://pastebin.com/raw/n7UWskEA"
+local function getKeys() local ok,res=pcall(function()return game:HttpGet(KEY_URL)end); if not ok then return{}end; local k={}; for v in res:gmatch("[^\n]+")do local t=v:match("^%s*(.-)%s*$"); if t~=""then table.insert(k,t)end end; return k end
+local function checkKey(e) for _,v in pairs(getKeys())do if v==e then return true end end; return false end
+
+-- KEY SYSTEM (required every execution)
+local keyPassed=false
+local kW,kF=library:AddWindow("🔑 SCP HUB — Key",{main_color=Color3.fromRGB(100,20,180),title_bar={Color3.fromRGB(110,25,200),Color3.fromRGB(55,5,100)},background={Color3.fromRGB(10,5,18)},background_transparency=0,min_size=Vector2.new(440,150),can_resize=false})
+local kt,_=kW:AddTab("🔑  Key"); kt:AddLabel("⚡  SCP HUB  •  Rivals  •  TEJAZ"); kt:AddLabel("🔑  Get key at  discord.gg/KDx3D8hARN")
+local stL=kt:AddLabel("📋  Paste key below then press Enter")
+kt:AddTextBox("Paste key here...",function(v) if checkKey(v)then stL.Text="✅ Accepted! Loading..."; keyPassed=true else stL.Text="❌ Wrong key! discord.gg/KDx3D8hARN" end end,{clear=true})
+kt:AddButton("💬  Copy Discord",function() setclipboard("https://discord.gg/KDx3D8hARN"); notify("SCP","✅ Copied!",3) end)
+kt:AddButton("🔑  Get Free Key", function() setclipboard("https://discord.gg/KDx3D8hARN"); notify("SCP","🔑 Discord copied! Join to get key 👑",4) end)
+injectSCPLogo(kF)
+kt:Show()
+repeat task.wait(0.5) until keyPassed; kF:Destroy()
+
+local WIN_CFG={main_color=Color3.fromRGB(100,20,180),title_bar={Color3.fromRGB(110,25,200),Color3.fromRGB(55,5,100)},background={Color3.fromRGB(10,5,18)},background_transparency=0,min_size=Vector2.new(600,280),toggle_key=Enum.KeyCode.RightShift,can_resize=true}
+local win,winF=library:AddWindow("⚡ SCP HUB  |  Rivals  |  TEJAZ",WIN_CFG)
+task.defer(function() injectSCPLogo(winF) end)
+
+-- INFO TAB
+local infoTab,_=win:AddTab("📋  Info")
+infoTab:AddLabel("━━━━━━━  ⚡  SCP HUB  •  RIVALS  ━━━━━━━")
+infoTab:AddLabel("👑  Author   TEJAZ"); infoTab:AddLabel("💎  Version   4.5"); infoTab:AddLabel("🔄  Toggle   RightShift")
+infoTab:AddLabel("💬  Discord  discord.gg/KDx3D8hARN")
+infoTab:AddLabel("━━━━━━━  📊 SERVER INFO  ━━━━━━━")
+local plrCount=infoTab:AddLabel("🌐  Players: "..#Players:GetPlayers())
+local pingLbl=infoTab:AddLabel("📶  Ping: calculating...")
+task.spawn(function() while task.wait(2)do pcall(function() plrCount.Text="🌐  Players: "..#Players:GetPlayers(); local s=tick(); RunSvc.Heartbeat:Wait(); pingLbl.Text="📶  Ping: "..math.floor((tick()-s)*1000).."ms" end) end end)
+infoTab:AddButton("💬  Copy Discord",function() setclipboard("https://discord.gg/KDx3D8hARN"); notify("SCP","✅ Copied!",3) end)
+
+-- AIMBOT TAB
+local aimTab,_=win:AddTab("🎯  Aimbot")
+local aimbotOn=false; local fov=150; local aimPart="Head"
+aimTab:AddLabel("━━━━━━━  🎯 AIMBOT  ━━━━━━━")
+local fovLbl=aimTab:AddLabel("📐  FOV: 150")
+aimTab:AddSwitch("🎯  Aimbot (Hold Right Click)",function(v)
+    aimbotOn=v; if v then task.spawn(function() while aimbotOn do
+        if UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)then
+            local closest,cd=nil,fov; local cam=workspace.CurrentCamera
+            for _,p in ipairs(Players:GetPlayers())do if p~=LP and p.Character and p.Character:FindFirstChild(aimPart)then
+                local part=p.Character[aimPart]; local sp,onS=cam:WorldToScreenPoint(part.Position)
+                if onS then local mp=UIS:GetMouseLocation(); local d=(Vector2.new(sp.X,sp.Y)-mp).Magnitude; if d<cd then cd=d; closest=part end end
+            end end
+            if closest then local t=cam:WorldToScreenPoint(closest.Position); local mp=UIS:GetMouseLocation(); local np=mp:Lerp(Vector2.new(t.X,t.Y),0.35); mousemoverel(np.X-mp.X,np.Y-mp.Y) end
+        end; task.wait()
+    end end) end
 end)
+aimTab:AddSwitch("👻  Silent Aim",function(v) getgenv().scpSilent=v end)
+aimTab:AddSwitch("🔮  Prediction (Lead Target)",function(v) getgenv().scpPredict=v end)
+aimTab:AddButton("➕  FOV +25",function() fov=math.min(fov+25,500); fovLbl.Text="📐  FOV: "..fov end)
+aimTab:AddButton("➖  FOV -25",function() fov=math.max(fov-25,25); fovLbl.Text="📐  FOV: "..fov end)
+aimTab:AddLabel("━━━━━━━  🎯 AIM PART  ━━━━━━━")
+aimTab:AddButton("🧠  Head",function() aimPart="Head"; notify("SCP","Aim: Head",2) end)
+aimTab:AddButton("⬛  HumanoidRootPart",function() aimPart="HumanoidRootPart"; notify("SCP","Aim: HRP",2) end)
+aimTab:AddButton("🟫  UpperTorso",function() aimPart="UpperTorso"; notify("SCP","Aim: Torso",2) end)
 
-LocalPlayer.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
+-- PLAYER TAB
+local plrTab,_=win:AddTab("👤  Player")
+plrTab:AddLabel("━━━━━━━  🏃 MOVEMENT  ━━━━━━━")
+plrTab:AddSwitch("⚡  Speed (100)",function(v) if LP.Character and LP.Character:FindFirstChild("Humanoid")then LP.Character.Humanoid.WalkSpeed=v and 100 or 16 end end)
+plrTab:AddSwitch("🚀  Ultra Speed (250)",function(v) if LP.Character and LP.Character:FindFirstChild("Humanoid")then LP.Character.Humanoid.WalkSpeed=v and 250 or 16 end end)
+plrTab:AddSwitch("🦘  High Jump",function(v) if LP.Character and LP.Character:FindFirstChild("Humanoid")then LP.Character.Humanoid.JumpPower=v and 100 or 50 end end)
+plrTab:AddSwitch("♾️  Infinite Jump",function(v) getgenv().scpIJ=v; if v then getgenv().scpIJC=UIS.JumpRequest:Connect(function() if getgenv().scpIJ and LP.Character and LP.Character:FindFirstChild("Humanoid")then LP.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)end end) elseif getgenv().scpIJC then getgenv().scpIJC:Disconnect()end end)
+plrTab:AddSwitch("👻  Noclip",function(v) getgenv().scpNC=v; if v then getgenv().scpNCC=RunSvc.Stepped:Connect(function() if getgenv().scpNC and LP.Character then for _,p in pairs(LP.Character:GetDescendants())do if p:IsA("BasePart")then p.CanCollide=false end end end end) elseif getgenv().scpNCC then getgenv().scpNCC:Disconnect()end end)
+plrTab:AddSwitch("🌀  Spin Anti-Aim",function(v) getgenv().scpSpin=v; if v then task.spawn(function() while getgenv().scpSpin do if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")then LP.Character.HumanoidRootPart.CFrame=LP.Character.HumanoidRootPart.CFrame*CFrame.Angles(0,math.rad(10),0)end; task.wait(0.05)end end)end end)
+plrTab:AddSwitch("🌌  Low Gravity",function(v) workspace.Gravity=v and 50 or 196.2 end)
+plrTab:AddSwitch("🔆  Fullbright",function(v) game.Lighting.Brightness=v and 10 or 2; game.Lighting.GlobalShadows=not v end)
+plrTab:AddSwitch("🖥️  Low Graphics",function(v) game.Lighting.GlobalShadows=not v; settings().Rendering.QualityLevel=v and"Level01"or"Level21" end)
+
+-- VISUALS TAB
+local visTab,_=win:AddTab("👁️  Visuals")
+visTab:AddLabel("━━━━━━━  👁️ ESP  ━━━━━━━")
+visTab:AddSwitch("📦  Box ESP",function(v)
+    getgenv().scpBoxESP=v; if v then task.spawn(function() while getgenv().scpBoxESP do
+        for _,p in ipairs(Players:GetPlayers())do if p~=LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart")and not p.Character.HumanoidRootPart:FindFirstChild("SCPBox")then
+            local b=Instance.new("BoxHandleAdornment"); b.Name="SCPBox"; b.Adornee=p.Character.HumanoidRootPart; b.Size=Vector3.new(4,6,2); b.Color3=Color3.fromRGB(220,45,45); b.Transparency=0.4; b.AlwaysOnTop=true; b.ZIndex=5; b.Parent=p.Character.HumanoidRootPart
+        end end; task.wait(0.5)
+    end end) else for _,p in ipairs(Players:GetPlayers())do if p.Character and p.Character:FindFirstChild("HumanoidRootPart")then local b=p.Character.HumanoidRootPart:FindFirstChild("SCPBox"); if b then b:Destroy()end end end end
 end)
-
-local Screen = Instance.new("ScreenGui")
-local Main = Instance.new("Frame")
-local MainCorner = Instance.new("UICorner")
-local TitleBar = Instance.new("Frame")
-local TitleCorner = Instance.new("UICorner")
-local Title = Instance.new("TextLabel")
-local CloseButton = Instance.new("TextButton")
-local FpsLabel = Instance.new("TextLabel")
-local TimeLabel = Instance.new("TextLabel")
-local ExecLabel = Instance.new("TextLabel")
-local WhitelistToggle = Instance.new("TextButton")
-local WeakerToggle = Instance.new("TextButton")
-local StartButton = Instance.new("TextButton")
-local StopButton = Instance.new("TextButton")
-
-Screen.Parent = game:GetService("CoreGui")
-Screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-Screen.ResetOnSpawn = false
-
-Main.Parent = Screen
-Main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-Main.BackgroundTransparency = 0.1
-Main.Position = UDim2.new(0.5, -90, 0.1, 0)
-Main.Size = UDim2.new(0, 180, 0, 150)
-
-TitleBar.Parent = Main
-TitleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-TitleBar.BackgroundTransparency = 0.1
-TitleBar.Size = UDim2.new(1, 0, 0, 22)
-
-TitleCorner.Parent = TitleBar
-TitleCorner.CornerRadius = UDim.new(0, 4)
-
-MainCorner.Parent = Main
-MainCorner.CornerRadius = UDim.new(0, 4)
-
-Title.Parent = TitleBar
-Title.BackgroundTransparency = 1
-Title.Position = UDim2.new(0, 8, 0, 0)
-Title.Size = UDim2.new(1, -32, 1, 0)
-Title.Font = Enum.Font.Code
-Title.Text = "Auto Kill Control"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 13
-Title.TextXAlignment = Enum.TextXAlignment.Left
-
-CloseButton.Parent = TitleBar
-CloseButton.BackgroundTransparency = 1
-CloseButton.Position = UDim2.new(1, -20, 0, 0)
-CloseButton.Size = UDim2.new(0, 20, 1, 0)
-CloseButton.Font = Enum.Font.Code
-CloseButton.Text = "×"
-CloseButton.TextSize = 14
-CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseButton.AutoButtonColor = false
-
-FpsLabel.Parent = Main
-FpsLabel.BackgroundTransparency = 1
-FpsLabel.Position = UDim2.new(0, 8, 0, 26)
-FpsLabel.Size = UDim2.new(1, -10, 0, 18)
-FpsLabel.Font = Enum.Font.Code
-FpsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-FpsLabel.TextSize = 13
-FpsLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-TimeLabel.Parent = Main
-TimeLabel.BackgroundTransparency = 1
-TimeLabel.Position = UDim2.new(0, 8, 0, 46)
-TimeLabel.Size = UDim2.new(1, -10, 0, 18)
-TimeLabel.Font = Enum.Font.Code
-TimeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-TimeLabel.TextSize = 13
-TimeLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-ExecLabel.Parent = Main
-ExecLabel.BackgroundTransparency = 1
-ExecLabel.Position = UDim2.new(0, 8, 0, 66)
-ExecLabel.Size = UDim2.new(1, -10, 0, 18)
-ExecLabel.Font = Enum.Font.Code
-ExecLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-ExecLabel.TextSize = 13
-ExecLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-WhitelistToggle.Parent = Main
-WhitelistToggle.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-WhitelistToggle.Position = UDim2.new(0, 8, 0, 88)
-WhitelistToggle.Size = UDim2.new(1, -16, 0, 18)
-WhitelistToggle.Font = Enum.Font.Code
-WhitelistToggle.TextColor3 = Color3.fromRGB(0, 255, 0)
-WhitelistToggle.TextSize = 13
-WhitelistToggle.Text = "Whitelist Friends: ON"
-
-WeakerToggle.Parent = Main
-WeakerToggle.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-WeakerToggle.Position = UDim2.new(0, 8, 0, 108)
-WeakerToggle.Size = UDim2.new(1, -16, 0, 18)
-WeakerToggle.Font = Enum.Font.Code
-WeakerToggle.TextColor3 = Color3.fromRGB(0, 255, 0)
-WeakerToggle.TextSize = 13
-WeakerToggle.Text = "Kill Weaker Only: ON"
-
-StartButton.Parent = Main
-StartButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-StartButton.Position = UDim2.new(0, 8, 0, 128)
-StartButton.Size = UDim2.new(0, 78, 0, 18)
-StartButton.Font = Enum.Font.Code
-StartButton.TextColor3 = Color3.fromRGB(0, 255, 0)
-StartButton.TextSize = 13
-StartButton.Text = "Start"
-
-StopButton.Parent = Main
-StopButton.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-StopButton.Position = UDim2.new(0, 94, 0, 128)
-StopButton.Size = UDim2.new(0, 78, 0, 18)
-StopButton.Font = Enum.Font.Code
-StopButton.TextColor3 = Color3.fromRGB(255, 0, 0)
-StopButton.TextSize = 13
-StopButton.Text = "Stop"
-
-local Dragging = false
-local DragInput, MousePos, FramePos
-
-TitleBar.InputBegan:Connect(function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
-        Dragging = true
-        MousePos = Input.Position
-        FramePos = Main.Position
-        Input.Changed:Connect(function()
-            if Input.UserInputState == Enum.UserInputState.End then
-                Dragging = false
-            end
-        end)
-    end
+visTab:AddSwitch("✨  Player Chams",function(v)
+    getgenv().scpChams=v; if v then task.spawn(function() while getgenv().scpChams do
+        for _,p in ipairs(Players:GetPlayers())do if p~=LP and p.Character and not p.Character:FindFirstChild("SCPChams")then
+            local s=Instance.new("SelectionBox"); s.Name="SCPChams"; s.Adornee=p.Character; s.Color3=Color3.fromRGB(185,30,30); s.SurfaceTransparency=0.65; s.LineThickness=0.05; s.Parent=p.Character
+        end end; task.wait(0.5)
+    end end) else for _,p in ipairs(Players:GetPlayers())do if p.Character then local c=p.Character:FindFirstChild("SCPChams"); if c then c:Destroy()end end end end
 end)
-
-TitleBar.InputChanged:Connect(function(Input)
-    if Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch then
-        DragInput = Input
-    end
+visTab:AddSwitch("🏷️  Name + HP Tags",function(v)
+    getgenv().scpTags=v; if v then task.spawn(function() while getgenv().scpTags do
+        for _,p in ipairs(Players:GetPlayers())do if p~=LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart")and not p.Character.HumanoidRootPart:FindFirstChild("SCPTag")then
+            local hrp=p.Character.HumanoidRootPart
+            local bb=Instance.new("BillboardGui"); bb.Name="SCPTag"; bb.Adornee=hrp; bb.Size=UDim2.new(0,120,0,44); bb.StudsOffset=Vector3.new(0,3.5,0); bb.AlwaysOnTop=true; bb.Parent=hrp
+            local nl=Instance.new("TextLabel",bb); nl.Size=UDim2.new(1,0,0.5,0); nl.BackgroundTransparency=1; nl.Text=p.Name; nl.TextColor3=Color3.new(1,1,1); nl.TextSize=13; nl.Font=Enum.Font.GothamBlack; nl.TextStrokeTransparency=0
+            local hl=Instance.new("TextLabel",bb); hl.Size=UDim2.new(1,0,0.5,0); hl.Position=UDim2.new(0,0,0.5,0); hl.BackgroundTransparency=1; hl.TextSize=10; hl.Font=Enum.Font.GothamBold; hl.TextStrokeTransparency=0; hl.TextColor3=Color3.fromRGB(0,210,80)
+            local hum=p.Character:FindFirstChild("Humanoid"); if hum then hl.Text="❤️ "..math.floor(hum.Health).."/"..math.floor(hum.MaxHealth) end
+        end end; task.wait(0.25)
+    end end) else for _,p in ipairs(Players:GetPlayers())do if p.Character and p.Character:FindFirstChild("HumanoidRootPart")then local t2=p.Character.HumanoidRootPart:FindFirstChild("SCPTag"); if t2 then t2:Destroy()end end end end
 end)
+visTab:AddSwitch("🔆  Fullbright",function(v) game.Lighting.Brightness=v and 10 or 2; game.Lighting.GlobalShadows=not v end)
 
-UserInputService.InputChanged:Connect(function(Input)
-    if Input == DragInput and Dragging then
-        local Delta = Input.Position - MousePos
-        Main.Position = UDim2.new(FramePos.X.Scale, FramePos.X.Offset + Delta.X, FramePos.Y.Scale, FramePos.Y.Offset + Delta.Y)
-    end
-end)
+-- KILL TAB
+local killTab,_=win:AddTab("⚔️  Kill")
+local wl2={}
+killTab:AddLabel("━━━━━━━  ⚔️ KILL OPTIONS  ━━━━━━━")
+killTab:AddTextBox("➕ Whitelist name",function(v) if table.find(wl2,v)then for i,n in ipairs(wl2)do if n==v then table.remove(wl2,i);break end end; notify("SCP","Removed "..v,2) else table.insert(wl2,v); notify("SCP","Added "..v,2)end end,{clear=true})
+killTab:AddSwitch("☠️  Kill All",function(v) getgenv().scpKA=v; if v then task.spawn(function() while getgenv().scpKA do for _,p in ipairs(Players:GetPlayers())do if p~=LP and not table.find(wl2,p.Name)and p.Character and p.Character:FindFirstChild("Humanoid")then pcall(function()p.Character.Humanoid.Health=0 end)end end; task.wait(0.5)end end)end end)
+local kTgt=""
+killTab:AddTextBox("Kill specific player",function(v) kTgt=v end,{clear=false})
+killTab:AddSwitch("🎯  Kill Specific",function(v) getgenv().scpKO=v; if v then task.spawn(function() while getgenv().scpKO do local p=findPlayer(kTgt); if p and p~=LP and not table.find(wl2,p.Name)and p.Character and p.Character:FindFirstChild("Humanoid")then pcall(function()p.Character.Humanoid.Health=0 end)end; task.wait(0.5)end end)end end)
+local scN=""
+killTab:AddTextBox("Spy camera target",function(v) scN=v end,{clear=false})
+killTab:AddSwitch("📹  Spy Camera",function(v) if v then getgenv().scpSC=true; task.spawn(function() while getgenv().scpSC do local p=findPlayer(scN); if p and p.Character and p.Character:FindFirstChild("Humanoid")then workspace.CurrentCamera.CameraSubject=p.Character.Humanoid end; task.wait(0.25)end end) else getgenv().scpSC=false; if LP.Character and LP.Character:FindFirstChild("Humanoid")then workspace.CurrentCamera.CameraSubject=LP.Character.Humanoid end end end)
 
-WhitelistToggle.MouseButton1Click:Connect(function()
-    WhitelistFriends = not WhitelistFriends
-    WhitelistToggle.Text = "Whitelist Friends: " .. (WhitelistFriends and "ON" or "OFF")
-    WhitelistToggle.TextColor3 = WhitelistFriends and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 255, 255)
-    UpdateWhitelist()
-end)
+-- SETTINGS TAB
+local setTab,_=win:AddTab("⚙️  Settings")
+setTab:AddLabel("━━━━━━━  ⚙️ OPTIONS  ━━━━━━━")
+setTab:AddSwitch("🖥️  Low Graphics",function(v) game.Lighting.GlobalShadows=not v; game.Lighting.FogEnd=v and 9e9 or 1e5; settings().Rendering.QualityLevel=v and"Level01"or"Level21" end)
+setTab:AddButton("🛡️  Anti AFK",function() pcall(function()loadstring(game:HttpGet("https://raw.githubusercontent.com/hassanxzayn-lua/Anti-afk/main/antiafkbyhassanxzyn"))()end); notify("SCP","🛡️ ON",3) end)
+setTab:AddButton("💬  Copy Discord",function() setclipboard("https://discord.gg/KDx3D8hARN"); notify("SCP","✅ Copied!",3) end)
+setTab:AddButton("🗑️  Clear Saved Key",function() if writefile then writefile("SCP_HUB/key.txt","")end; notify("SCP","🗑️ Key cleared",3) end)
 
-WeakerToggle.MouseButton1Click:Connect(function()
-    KillOnlyWeaker = not KillOnlyWeaker
-    WeakerToggle.Text = "Kill Weaker Only: " .. (KillOnlyWeaker and "ON" or "OFF")
-    WeakerToggle.TextColor3 = KillOnlyWeaker and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 255, 255)
-    if not KillOnlyWeaker then
-        getgenv().TempWhitelistStronger = {}
-    end
-end)
-
-StartButton.MouseButton1Click:Connect(function()
-    Running = true
-    StartTime = os.time()
-end)
-
-StopButton.MouseButton1Click:Connect(function()
-    Running = false
-end)
-
-CloseButton.MouseButton1Click:Connect(function()
-    Screen:Destroy()
-end)
-
-RunService.RenderStepped:Connect(function()
-    FpsLabel.Text = "fps: " .. math.floor(1/RunService.RenderStepped:Wait())
-    TimeLabel.Text = "time: " .. os.date("%H:%M:%S")
-    local Elapsed = os.time() - StartTime
-    ExecLabel.Text = string.format("exec: %02d:%02d:%02d", Elapsed/3600%24, Elapsed/60%60, Elapsed%60)
-end)
+infoTab:Show()
+notify("SCP HUB","⚔️ Rivals Loaded! RShift to toggle 👑",5)
