@@ -1,623 +1,380 @@
-local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
+-- // ═══════════════════════════════════════════════
+-- //         AimCore VoidSpam | Auto-Execute
+-- //         Execute ONCE — persists every match
+-- // ═══════════════════════════════════════════════
 
-local localPlayer = Players.LocalPlayer
-local username = localPlayer.Name
-local userId = localPlayer.UserId
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService  = game:GetService("TeleportService")
 
-local Player = Players.LocalPlayer
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualUser = game:GetService("VirtualUser")
-local muscleEvent = Player:WaitForChild("muscleEvent")
-local antiAFKConnection
+local LocalPlayer = Players.LocalPlayer
 
+-- // ─────────────────────────────────────────
+-- //   PREVENT DOUBLE-EXECUTION IN SAME SESSION
+-- // ─────────────────────────────────────────
 
+if _G.AimCoreVoidSpamLoaded then
+    return
+end
+_G.AimCoreVoidSpamLoaded = true
 
-local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/memejames/elerium-v2-ui-library//main/Library", true))()
+-- // ─────────────────────────────────────────
+-- //         CONFIG
+-- // ─────────────────────────────────────────
 
-local window = library:AddWindow("SCPxMLG | KTA ON BOTTOM", {
-    main_color = Color3.fromRGB(180, 0, 0),
-    min_size = Vector2.new(600, 630),
-    can_resize = false,
-})
+local MIN_DIST        = 14000000000   -- 14 billion studs
+local MAX_DIST        = 15000000000   -- 15 billion studs
+local BASE_INTERVAL   = 0.2
+local GLITCH_INTERVAL = 0.1
 
-local function setupAntiAFK()
-    if antiAFKConnection then
-        antiAFKConnection:Disconnect()
+-- // ─────────────────────────────────────────
+-- //         STATE
+-- // ─────────────────────────────────────────
+
+local VoidSpamActive   = false
+local VoidSpamConn     = nil
+local LastTeleportTime = 0
+local TeleportPhase    = 0
+local ZigZagDirection  = 1
+local MethodIndex      = 0
+
+-- // ─────────────────────────────────────────
+-- //         TELEPORT METHODS
+-- // ─────────────────────────────────────────
+
+local function GetRandomDist()
+    return math.random(MIN_DIST, MAX_DIST)
+end
+
+local function TeleportRandom()
+    local dist   = GetRandomDist()
+    local angle1 = math.random() * math.pi * 2
+    local angle2 = math.random() * math.pi * 2
+    return Vector3.new(
+        math.cos(angle1) * math.cos(angle2) * dist,
+        math.sin(angle2) * dist,
+        math.sin(angle1) * math.cos(angle2) * dist
+    )
+end
+
+local function TeleportZigZag()
+    local dist = GetRandomDist()
+    TeleportPhase   = TeleportPhase + (math.pi / 4)
+    ZigZagDirection = ZigZagDirection * -1
+    return Vector3.new(
+        math.cos(TeleportPhase) * dist * ZigZagDirection,
+        math.sin(TeleportPhase * 0.5) * (dist * 0.3),
+        math.sin(TeleportPhase) * dist
+    )
+end
+
+local function TeleportUnpredictable()
+    local dist  = GetRandomDist()
+    local chaos = math.random(1, 6)
+    if chaos == 1 then
+        return Vector3.new(dist, math.random(-1000000, 1000000), math.random(-dist, dist))
+    elseif chaos == 2 then
+        return Vector3.new(-dist, math.random(0, dist), math.random(-dist, dist))
+    elseif chaos == 3 then
+        return Vector3.new(math.random(-dist, dist), dist, math.random(-dist, dist))
+    elseif chaos == 4 then
+        return Vector3.new(math.random(-dist, dist), -dist * 0.5, math.random(-dist, dist))
+    elseif chaos == 5 then
+        return Vector3.new(dist * math.random() * ZigZagDirection, math.random(-dist, dist), dist * math.random())
+    else
+        return Vector3.new(-dist * math.random(), dist * math.random(), -dist * math.random())
+    end
+end
+
+local function TeleportGlitch()
+    local dist = GetRandomDist()
+    return Vector3.new(
+        (math.random() > 0.5 and 1 or -1) * math.random(MIN_DIST, MAX_DIST),
+        (math.random() > 0.5 and 1 or -1) * math.random(0, math.floor(dist * 0.4)),
+        (math.random() > 0.5 and 1 or -1) * math.random(MIN_DIST, MAX_DIST)
+    )
+end
+
+local function GetNextPosition()
+    MethodIndex = (MethodIndex + 1) % 4
+    if MethodIndex == 0 then
+        return TeleportRandom(), BASE_INTERVAL
+    elseif MethodIndex == 1 then
+        return TeleportZigZag(), BASE_INTERVAL
+    elseif MethodIndex == 2 then
+        return TeleportUnpredictable(), BASE_INTERVAL
+    else
+        return TeleportGlitch(), GLITCH_INTERVAL
+    end
+end
+
+-- // ─────────────────────────────────────────
+-- //         CORE TELEPORT LOOP
+-- // ─────────────────────────────────────────
+
+local function DoTeleport(pos)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    hrp.CFrame = CFrame.new(pos)
+end
+
+local function StartLoop()
+    if VoidSpamConn then
+        VoidSpamConn:Disconnect()
+        VoidSpamConn = nil
     end
 
-    antiAFKConnection = Player.Idled:Connect(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(Vector2.new())
+    local NextInterval = BASE_INTERVAL
+
+    VoidSpamConn = RunService.Heartbeat:Connect(function()
+        if not VoidSpamActive then return end
+        local now = tick()
+        if now - LastTeleportTime >= NextInterval then
+            LastTeleportTime = now
+            local pos, interval = GetNextPosition()
+            NextInterval = interval
+            pcall(DoTeleport, pos)
+        end
     end)
 end
-setupAntiAFK()
 
-local function removePortals()
-    for _, portal in pairs(game:GetDescendants()) do
-        if portal.Name == "RobloxForwardPortals" then
-            portal:Destroy()
+-- // ─────────────────────────────────────────
+-- //         GUI BUILDER
+-- // ─────────────────────────────────────────
+
+local function BuildGUI()
+    local old = LocalPlayer.PlayerGui:FindFirstChild("AimCoreVoidSpam")
+    if old then old:Destroy() end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name           = "AimCoreVoidSpam"
+    ScreenGui.ResetOnSpawn   = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.DisplayOrder   = 999
+    ScreenGui.Parent         = LocalPlayer.PlayerGui
+
+    -- Main Frame
+    local Frame = Instance.new("Frame")
+    Frame.Name             = "MainFrame"
+    Frame.Size             = UDim2.new(0, 130, 0, 68)
+    Frame.Position         = UDim2.new(1, -148, 0, 16)
+    Frame.BackgroundColor3 = Color3.fromRGB(10, 8, 18)
+    Frame.BorderSizePixel  = 0
+    Frame.Active           = true
+    Frame.Parent           = ScreenGui
+
+    local FrameCorner = Instance.new("UICorner")
+    FrameCorner.CornerRadius = UDim.new(0, 8)
+    FrameCorner.Parent = Frame
+
+    local FrameStroke = Instance.new("UIStroke")
+    FrameStroke.Color     = Color3.fromRGB(120, 60, 220)
+    FrameStroke.Thickness = 1.5
+    FrameStroke.Parent    = Frame
+
+    -- Title Bar
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Name             = "TitleBar"
+    TitleBar.Size             = UDim2.new(1, 0, 0, 22)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(20, 10, 38)
+    TitleBar.BorderSizePixel  = 0
+    TitleBar.Parent           = Frame
+
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 8)
+    TitleCorner.Parent = TitleBar
+
+    local TitleFix = Instance.new("Frame")
+    TitleFix.Size             = UDim2.new(1, 0, 0.5, 0)
+    TitleFix.Position         = UDim2.new(0, 0, 0.5, 0)
+    TitleFix.BackgroundColor3 = Color3.fromRGB(20, 10, 38)
+    TitleFix.BorderSizePixel  = 0
+    TitleFix.Parent           = TitleBar
+
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.Size                  = UDim2.new(1, 0, 1, 0)
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Text                  = "⚡ VOIDSPAM"
+    TitleLabel.Font                  = Enum.Font.GothamBold
+    TitleLabel.TextSize              = 11
+    TitleLabel.TextColor3            = Color3.fromRGB(180, 100, 255)
+    TitleLabel.TextXAlignment        = Enum.TextXAlignment.Center
+    TitleLabel.Parent                = TitleBar
+
+    -- ON/OFF Button
+    local ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Name            = "ToggleBtn"
+    ToggleBtn.Size            = UDim2.new(1, -16, 0, 30)
+    ToggleBtn.Position        = UDim2.new(0, 8, 0, 28)
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(28, 14, 50)
+    ToggleBtn.BorderSizePixel = 0
+    ToggleBtn.Text            = "ON / OFF"
+    ToggleBtn.Font            = Enum.Font.GothamBold
+    ToggleBtn.TextSize        = 12
+    ToggleBtn.TextColor3      = Color3.fromRGB(160, 80, 255)
+    ToggleBtn.AutoButtonColor = false
+    ToggleBtn.Parent          = Frame
+
+    local BtnCorner = Instance.new("UICorner")
+    BtnCorner.CornerRadius = UDim.new(0, 6)
+    BtnCorner.Parent = ToggleBtn
+
+    local BtnStroke = Instance.new("UIStroke")
+    BtnStroke.Color     = Color3.fromRGB(100, 40, 200)
+    BtnStroke.Thickness = 1.2
+    BtnStroke.Parent    = ToggleBtn
+
+    -- Status Dot
+    local StatusDot = Instance.new("Frame")
+    StatusDot.Size             = UDim2.new(0, 7, 0, 7)
+    StatusDot.Position         = UDim2.new(0, 8, 0, 30)
+    StatusDot.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+    StatusDot.BorderSizePixel  = 0
+    StatusDot.Parent           = Frame
+
+    local DotCorner = Instance.new("UICorner")
+    DotCorner.CornerRadius = UDim.new(1, 0)
+    DotCorner.Parent = StatusDot
+
+    -- // Visual sync — carries over ON state through match teleports
+    local function SyncVisual()
+        if VoidSpamActive then
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 0, 80)
+            ToggleBtn.TextColor3       = Color3.fromRGB(200, 120, 255)
+            BtnStroke.Color            = Color3.fromRGB(160, 60, 255)
+            StatusDot.BackgroundColor3 = Color3.fromRGB(160, 60, 255)
+        else
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(28, 14, 50)
+            ToggleBtn.TextColor3       = Color3.fromRGB(100, 60, 160)
+            BtnStroke.Color            = Color3.fromRGB(60, 20, 120)
+            StatusDot.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
         end
     end
-    if _G.AdRemovalConnection then
-        _G.AdRemovalConnection:Disconnect()
+
+    local function SetActive(state)
+        VoidSpamActive = state
+        if state then LastTeleportTime = 0 end
+        SyncVisual()
     end
 
-    _G.AdRemovalConnection = game.DescendantAdded:Connect(function(descendant)
-        if descendant.Name == "RobloxForwardPortals" then
-            descendant:Destroy()
+    -- Sync button visuals to current state on every re-inject
+    SyncVisual()
+
+    ToggleBtn.MouseButton1Click:Connect(function()
+        SetActive(not VoidSpamActive)
+    end)
+
+    ToggleBtn.MouseEnter:Connect(function()
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = Color3.fromRGB(50, 20, 90)
+        }):Play()
+    end)
+
+    ToggleBtn.MouseLeave:Connect(function()
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.15), {
+            BackgroundColor3 = VoidSpamActive
+                and Color3.fromRGB(40, 0, 80)
+                or  Color3.fromRGB(28, 14, 50)
+        }):Play()
+    end)
+
+    -- // Draggable (PC + Mobile + Tablet)
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    local function UpdateDrag(input)
+        local delta = input.Position - dragStart
+        Frame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+
+    TitleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragging  = true
+            dragStart = input.Position
+            startPos  = Frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    TitleBar.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            UpdateDrag(input)
         end
     end)
 end
-removePortals()
 
-ReplicatedStorage.ChildAdded:Connect(function(child)
-    if table.find(blockedFrames, child.Name) and child:IsA("GuiObject") then
-        child.Visible = false
-    end
+-- // ─────────────────────────────────────────
+-- //   TELEPORT DETECTION + AUTO RE-INJECT
+-- // ─────────────────────────────────────────
+
+local LastPlaceId = game.PlaceId
+
+local function ReInject(reason)
+    print("[AimCore] Re-injecting — Reason:", reason)
+    task.wait(0.8)
+    BuildGUI()
+    StartLoop()
+    print("[AimCore] VoidSpam re-injected | PlaceId:", game.PlaceId)
+end
+
+-- Catches Rivals matchmaking teleport arrivals
+pcall(function()
+    TeleportService.LocalPlayerArrivedFromTeleport:Connect(function()
+        ReInject("Arrived from teleport")
+    end)
 end)
 
-local MainTab = window:AddTab("Main")
-local KillingTab = window:AddTab("Killing")
-local SpecsTab = window:AddTab("Specs")
-local FarmingTab = window:AddTab("Farming")
-local InventoryTab = window:AddTab("Inventory")
-local PetsTab = window:AddTab("Pet Shop")
-local TeleportTab = window:AddTab("Teleports")
-local StatsTab = window:AddTab("Stats")
-local infoTab = window:AddTab("Info")
-KillingTab:Show()
-local farmTab = window:AddTab("rebirthing")
-
-infoTab:AddLabel("Made by TEJAZ").TextSize = 20
-infoTab:AddLabel("Official Discord: https://discord.gg/nDSy4jdVDc ")
-infoTab:AddButton("Copy Discord Invite", function()
-    local link = "https://discord.gg/9eFf93Kg8D"
-    if setclipboard then
-        setclipboard(link)
-        game.StarterGui:SetCore("SendNotification", {
-            Title = "Link Copied!";
-            Text = "You can continue to Discord now.";
-            Duration = 3;
-        })
+-- Catches in-match respawns — also watches for missing GUI
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if not LocalPlayer.PlayerGui:FindFirstChild("AimCoreVoidSpam") then
+        ReInject("GUI missing after respawn")
     else
-        game.StarterGui:SetCore("SendNotification", {
-            Title = "Error!";
-            Text = "Not Supported.";
-            Duration = 3;
-        })
-    end
-end)
-
-infoTab:AddLabel("")
-local wLabel = infoTab:AddLabel("VERSION//2.0.0")
-wLabel.TextSize = 30
-wLabel.Font = Enum.Font.Arcade
-
-MainTab:AddLabel("Settings:").TextSize = 22
-
-local changeSpeedSizeRemote = ReplicatedStorage.rEvents.changeSpeedSizeRemote
-
-local userSize = 2
-local sizeActive = false
-
-MainTab:AddTextBox("Size", function(text)
-        text = string.gsub(text, "%s+", "")
-        local value = tonumber(text)
-        if value and value > 0 then
-                userSize = value
-        end
-end)
-
-local setsizeswitch = MainTab:AddSwitch("Set Size", function(bool)
-        sizeActive = bool
-end)
-
-setsizeswitch:Set(false)
-
-task.spawn(function()
-        while true do
-                if sizeActive then
-                        local character = Players.LocalPlayer.Character
-                        if character then
-                                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                                if humanoid then
-                                        changeSpeedSizeRemote:InvokeServer("changeSize", userSize)
-                                end
-                        end
-                end
-                task.wait(0.15)
-        end
-end)
-
-local userSpeed = 120
-local speedActive = false
-
-MainTab:AddTextBox("Speed", function(text)
-        text = string.gsub(text, "%s+", "")
-        local value = tonumber(text)
-        if value and value > 0 then
-                userSpeed = value
-        end
-end)
-
-local setspeedswitch = MainTab:AddSwitch("Set Speed", function(bool)
-        speedActive = bool
-end)
-
-setspeedswitch:Set(false)
-
-task.spawn(function()
-        while true do
-                if speedActive then
-                        local character = Players.LocalPlayer.Character
-                        if character then
-                                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                                if humanoid then
-                                        changeSpeedSizeRemote:InvokeServer("changeSpeed", userSpeed)
-                                end
-                        end
-                end
-                task.wait(0.15)
-        end
-end)
-
-MainTab:AddLabel("Important:").TextSize = 22
-
-local antiKnockbackSwitch = MainTab:AddSwitch("Anti Fling", function(bool)
-    if bool then
-        local playerName = game.Players.LocalPlayer.Name
-        local character = game.Workspace:FindFirstChild(playerName)
-        if character then
-            local rootPart = character:FindFirstChild("HumanoidRootPart")
-            if rootPart then
-                local bodyVelocity = Instance.new("BodyVelocity")
-                bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-                bodyVelocity.Velocity = Vector3.new(0, 0, 0)
-                bodyVelocity.P = 1250
-                bodyVelocity.Parent = rootPart
-            end
-        end
-    else
-        local playerName = game.Players.LocalPlayer.Name
-        local character = game.Workspace:FindFirstChild(playerName)
-        if character then
-            local rootPart = character:FindFirstChild("HumanoidRootPart")
-            if rootPart then
-                local existingVelocity = rootPart:FindFirstChild("BodyVelocity")
-                if existingVelocity and existingVelocity.MaxForce == Vector3.new(100000, 0, 100000) then
-                    existingVelocity:Destroy()
-                end
-            end
-        end
-    end
-end)
-antiKnockbackSwitch:Set(true)
-
-local lockRunning = false
-local lockThread = nil
-
-local lockSwitch = MainTab:AddSwitch("Lock Position", function(state)
-    lockRunning = state
-    if lockRunning then
-        local player = game.Players.LocalPlayer
-        local char = player.Character or player.CharacterAdded:Wait()
-        local hrp = char:WaitForChild("HumanoidRootPart")
-        local lockPosition = hrp.Position
-
-        lockThread = coroutine.create(function()
-            while lockRunning do
-                hrp.Velocity = Vector3.new(0, 0, 0)
-                hrp.RotVelocity = Vector3.new(0, 0, 0)
-                hrp.CFrame = CFrame.new(lockPosition)
-                wait(0.05) 
-            end
-        end)
-
-        coroutine.resume(lockThread)
-    end
-end)
-lockSwitch:Set(false)
-
-local showpetsswitch = MainTab:AddSwitch("Show Pets", function(bool)
-    local player = game:GetService("Players").LocalPlayer
-    if player:FindFirstChild("hidePets") then
-        player.hidePets.Value = bool
-    end
-end)
-showpetsswitch:Set(false)
-
-local showotherpetsswitch = MainTab:AddSwitch("Show Other Pets", function(bool)
-    local player = game:GetService("Players").LocalPlayer
-    if player:FindFirstChild("showOtherPetsOn") then
-        player.showOtherPetsOn.Value = bool
-    end
-end)
-showotherpetsswitch:Set(false)
-
-
-
-MainTab:AddLabel("Misc:").TextSize = 22
-
-MainTab:AddSwitch("Infinite Jump", function(bool)
-    _G.InfiniteJump = bool
-
-    if bool then
-        local InfiniteJumpConnection
-        InfiniteJumpConnection = game:GetService("UserInputService").JumpRequest:Connect(function()
-            if _G.InfiniteJump then
-                game:GetService("Players").LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState("Jumping")
-            else
-                InfiniteJumpConnection:Disconnect()
-            end
-        end)
-    end
-end)
-
-
-local parts = {}
-local partSize = 2048
-local totalDistance = 50000
-local startPosition = Vector3.new(-2, -9.5, -2)
-
-local function createAllParts()
-    local numberOfParts = math.ceil(totalDistance / partSize)
-
-    for x = 0, numberOfParts - 1 do
-        for z = 0, numberOfParts - 1 do
-            local function createPart(pos, name)
-                local part = Instance.new("Part")
-                part.Size = Vector3.new(partSize, 1, partSize)
-                part.Position = pos
-                part.Anchored = true
-                part.Transparency = 1
-                part.CanCollide = true
-                part.Name = name
-                part.Parent = workspace
-                return part
-            end
-
-            table.insert(parts, createPart(startPosition + Vector3.new(x*partSize,0,z*partSize), "Part_Side_"..x.."_"..z))
-            table.insert(parts, createPart(startPosition + Vector3.new(-x*partSize,0,z*partSize), "Part_LeftRight_"..x.."_"..z))
-            table.insert(parts, createPart(startPosition + Vector3.new(-x*partSize,0,-z*partSize), "Part_UpLeft_"..x.."_"..z))
-            table.insert(parts, createPart(startPosition + Vector3.new(x*partSize,0,-z*partSize), "Part_UpRight_"..x.."_"..z))
-        end
-    end
-end
-task.spawn(createAllParts)
-
-local walkonwaterSwicth =MainTab:AddSwitch("Walk on Water", function(bool)
-    for _, part in ipairs(parts) do
-        if part and part.Parent then
-            part.CanCollide = bool
-        end
-    end
-end)
-walkonwaterSwicth:Set(true)
-
-
-local spinwheelSwitch = MainTab:AddSwitch("Spin Fortune Wheel", function(bool)
-    _G.AutoSpinWheel = bool
-
-    if bool then
-        spawn(function()
-            while _G.AutoSpinWheel and wait(1) do
-                game:GetService("ReplicatedStorage").rEvents.openFortuneWheelRemote:InvokeServer("openFortuneWheel", game:GetService("ReplicatedStorage").fortuneWheelChances["Fortune Wheel"])
-            end
-        end)
-    end
-end)
-
-local timeDropdown = MainTab:AddDropdown("Change Time", function(selection)
-    local lighting = game:GetService("Lighting")
-
-    if selection == "Night" then
-        lighting.ClockTime = 0
-    elseif selection == "Day" then
-        lighting.ClockTime = 12
-    elseif selection == "Midnight" then
-        lighting.ClockTime = 6
-    end
-end)
-
-timeDropdown:Add("Night")
-timeDropdown:Add("Day")
-timeDropdown:Add("Midnight")
-
-SpecsTab:AddLabel("Player Stats:").TextSize = 24
-
-local playerToInspect = nil
-
-local emojiMap = {
-    ["Time"] = utf8.char(0x1F55B),
-    ["Stats"] = utf8.char(0x1F4CA),
-    ["Strength"] = utf8.char(0x1F4AA),
-    ["Rebirths"] = utf8.char(0x1F504),
-    ["Durability"] = utf8.char(0x1F6E1),
-    ["Kills"] = utf8.char(0x1F480),
-    ["Agility"] = utf8.char(0x1F3C3),
-    ["Evil Karma"] = utf8.char(0x1F608),
-    ["Good Karma"] = utf8.char(0x1F607),
-    ["Brawls"] = utf8.char(0x1F94A)
-}
-
-local statDefinitions = {
-    { name = "Strength", statName = "Strength" },
-    { name = "Rebirths", statName = "Rebirths" },
-    { name = "Durability", statName = "Durability" },
-    { name = "Agility", statName = "Agility" },
-    { name = "Kills", statName = "Kills" },
-    { name = "Evil Karma", statName = "evilKarma" },
-    { name = "Good Karma", statName = "goodKarma" },
-    { name = "Brawls", statName = "Brawls" }
-}
-
-local function getCurrentPlayers()
-    local playersList = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        table.insert(playersList, p)
-    end
-    return playersList
-end
-
-local specdropdown = SpecsTab:AddDropdown("Choose Player", function(text) 
-    for _, player in ipairs(getCurrentPlayers()) do
-        local optionText = player.DisplayName .. " | " .. player.Name
-        if text == optionText then
-            playerToInspect = player
-            updateStatLabels(playerToInspect)
-            break
+        -- GUI exists — just reset the spam timer if active
+        if VoidSpamActive then
+            LastTeleportTime = 0
         end
     end
 end)
 
-for _, player in ipairs(getCurrentPlayers()) do
-    specdropdown:Add(player.DisplayName .. " | " .. player.Name)
-end
-
-Players.PlayerAdded:Connect(function(player)
-    specdropdown:Add(player.DisplayName .. " | " .. player.Name)
-end)
-
-Players.PlayerRemoving:Connect(function(player)
-    specdropdown:Clear()
-    for _, p in ipairs(getCurrentPlayers()) do
-        specdropdown:Add(p.DisplayName .. " | " .. p.Name)
-    end
-end)
-
-local playerNameLabel = SpecsTab:AddLabel("Name: N/A")
-playerNameLabel.TextSize = 20
-
-local playerUsernameLabel = SpecsTab:AddLabel("Username: N/A")
-playerUsernameLabel.TextSize = 20
-
-local statLabels = {}
-for _, info in ipairs(statDefinitions) do
-    statLabels[info.name] = SpecsTab:AddLabel(emojiMap[info.name] .. " " .. info.name .. ": 0 (0)")
-    statLabels[info.name].TextSize = 20
-end
-
-local function formatNumber(n)
-    if n >= 1e15 then
-        return string.format("%.1fqa", n/1e15)
-    elseif n >= 1e12 then
-        return string.format("%.1ft", n/1e12)
-    elseif n >= 1e9 then
-        return string.format("%.1fb", n/1e9)
-    elseif n >= 1e6 then
-        return string.format("%.1fm", n/1e6)
-    elseif n >= 1e3 then
-        return string.format("%.1fk", n/1e3)
-    else
-        return tostring(n)
-    end
-end
-
-local function formatWithCommas(n)
-    local formatted = tostring(math.floor(n))
-    while true do
-        formatted, k = formatted:gsub("^(-?%d+)(%d%d%d)", '%1,%2')
-        if k == 0 then break end
-    end
-    return formatted
-end
-
-
-local function updateStatLabels(targetPlayer)
-    if not targetPlayer then return end
-
-    playerNameLabel.Text = "Name: " .. targetPlayer.DisplayName
-    playerUsernameLabel.Text = "Username: " .. targetPlayer.Name
-
-    local leaderstats = targetPlayer:FindFirstChild("leaderstats")
-    if not leaderstats then return end
-
-    for _, info in ipairs(statDefinitions) do
-        local statObject
-
-        if leaderstats:FindFirstChild(info.statName) then
-            statObject = leaderstats:FindFirstChild(info.statName)
-        elseif targetPlayer:FindFirstChild(info.statName) then
-            statObject = targetPlayer:FindFirstChild(info.statName)
-        end
-
-        if statObject then
-            local value = statObject.Value
-            local emoji = emojiMap[info.name] or ""
-            statLabels[info.name].Text = string.format(
-                "%s %s: %s (%s)",
-                emoji,
-                info.name,
-                formatNumber(value),
-                formatWithCommas(value)
-            )
-        else
-            statLabels[info.name].Text = emojiMap[info.name] .. " " .. info.name .. ": 0 (0)"
-        end
-    end
-end
-
+-- Heartbeat watchdog — silently re-injects if GUI disappears for any reason
 task.spawn(function()
     while true do
-        if playerToInspect then
-            updateStatLabels(playerToInspect)
+        task.wait(3)
+        if not LocalPlayer.PlayerGui:FindFirstChild("AimCoreVoidSpam") then
+            ReInject("Watchdog: GUI missing")
         end
-        task.wait(0.2)
+        if VoidSpamActive and not VoidSpamConn then
+            StartLoop()
+        end
     end
 end)
 
-SpecsTab:AddLabel("————————————————————————————")
+-- // ─────────────────────────────────────────
+-- //         INITIAL BOOT
+-- // ─────────────────────────────────────────
 
-SpecsTab:AddLabel("Advanced Stats:").TextSize = 24
+BuildGUI()
+StartLoop()
 
-local enemyHealthLabel = SpecsTab:AddLabel("Enemy Health: N/A")
-enemyHealthLabel.TextSize = 20
-enemyHealthLabel.TextColor3 = Color3.fromRGB(0, 140, 255)
-
-local playerDamageLabel = SpecsTab:AddLabel("Your Damage: N/A")
-playerDamageLabel.TextSize = 20
-playerDamageLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-
-local hitsToKillLabel = SpecsTab:AddLabel("Hits to Kill: N/A")
-hitsToKillLabel.TextSize = 20
-hitsToKillLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-
-
-
-local function calculateEnemyHealth(targetPlayer)
-    if not targetPlayer then return 0 end
-
-    local baseDura = 0
-    local durabilityStat = targetPlayer:FindFirstChild("Durability") 
-        or (targetPlayer:FindFirstChild("leaderstats") and targetPlayer.leaderstats:FindFirstChild("Durability"))
-    if durabilityStat then
-        baseDura = durabilityStat.Value
-    end
-
-    local totalMultiplier = 1
-
-    local ultFolder = targetPlayer:FindFirstChild("ultimatesFolder")
-    if ultFolder then
-        local infernalHealth = ultFolder:FindFirstChild("Infernal Health")
-        if infernalHealth then
-            local upgrades = infernalHealth.Value or 0
-            totalMultiplier = totalMultiplier + 0.15 * upgrades
-        end
-    end
-
-    local equippedPetsFolder = targetPlayer:FindFirstChild("equippedPets")
-    if equippedPetsFolder then
-        local petBonus = 0
-        for _, petValue in ipairs(equippedPetsFolder:GetChildren()) do
-            if petValue:IsA("ObjectValue") and petValue.Value then
-                local petNameLower = string.lower(petValue.Value.Name)
-                if petNameLower:match("mighty") and petNameLower:match("monster") then
-                    petBonus = petBonus + 0.5
-                end
-            end
-        end
-        totalMultiplier = totalMultiplier + petBonus
-    end
-
-    local totalHealth = baseDura * totalMultiplier
-    return totalHealth
-end
-
-local function calculateLocalPlayerDamage()
-    local strengthStat = nil
-    local leaderstats = Player:FindFirstChild("leaderstats")
-    if leaderstats then
-        strengthStat = leaderstats:FindFirstChild("Strength")
-    end
-    if not strengthStat then return 0 end
-
-    local baseDamage = strengthStat.Value * 0.0667
-    local totalMultiplier = 1
-
-    local ultFolder = Player:FindFirstChild("ultimatesFolder")
-    if ultFolder then
-        local demonDamage = ultFolder:FindFirstChild("Demon Damage")
-        if demonDamage then
-            local upgrades = demonDamage.Value or 0
-            totalMultiplier = totalMultiplier + 0.1 * upgrades
-        end
-    end
-
-    local equippedPetsFolder = Player:FindFirstChild("equippedPets")
-    if equippedPetsFolder then
-        local petBonus = 0
-        for _, petValue in ipairs(equippedPetsFolder:GetChildren()) do
-            if petValue:IsA("ObjectValue") and petValue.Value then
-                local petNameLower = string.lower(petValue.Value.Name)
-                if petNameLower:match("wild") and petNameLower:match("wizard") then
-                    petBonus = petBonus + 0.5
-                end
-            end
-        end
-        totalMultiplier = totalMultiplier + petBonus
-    end
-
-    baseDamage = baseDamage * totalMultiplier
-    return baseDamage
-end
-
-
-
-local function calculateHitsToKill(health, damage)
-    if damage <= 0 then return "∞" end
-    local hits = math.ceil(health / damage)
-    if hits > 100 then
-        return "∞"
-    elseif hits < 1 then
-        return 1
-    else
-        return hits
-    end
-end
-
-local function updateAdvancedStats(targetPlayer)
-    if not targetPlayer then
-        enemyHealthLabel.Text = "Enemy Health: N/A"
-        playerDamageLabel.Text = "Your Damage: N/A"
-        hitsToKillLabel.Text = "Hits to Kill: N/A"
-        return
-    end
-    local enemyHealth = calculateEnemyHealth(targetPlayer)
-    local playerDamage = calculateLocalPlayerDamage()
-    local hitsToKill = calculateHitsToKill(enemyHealth, playerDamage)
-    enemyHealthLabel.Text = string.format("Enemy Health: %s (%s)", formatNumber(enemyHealth), formatWithCommas(enemyHealth))
-    playerDamageLabel.Text = string.format("Your Damage: %s (%s)", formatNumber(playerDamage), formatWithCommas(playerDamage))
-    hitsToKillLabel.Text = string.format("Hits to Kill: %s", tostring(hitsToKill))
-end
-
-task.spawn(function()
-    while true do
-        if playerToInspect then
-            updateAdvancedStats(playerToInspect)
-        else
-            updateAdvancedStats(nil)
-        end
-        task.wait(0.1)
-    end
-end)
-
-local function checkCharacter()
-    if not game.Players.LocalPlayer.Character then
-        repeat task.wait() until game.Players.LocalPlayer.Character
-    end
-    return game.Players.LocalPlayer.Character
-end
-
-local function gettool()
-    for _, v in pairs(game.Players.LocalPlayer.Backpack:GetChildren()) do
-        if v.Name == "Punch" and game.Players.LocalPlayer.Character:FindFirstChild("Humanoid") then
-            game.Players.LocalPlayer.Character.Humanoid:EquipTool(v)
-        end
-    end
-    game.Players.LocalPlayer.muscleEvent:FireServer("punch", "leftHand")
-    game.Players.LocalPlayer.muscleEvent:FireServer("punch", "rightHand")
-end
-
-local function isPlayerAlive(player)
-    return player and player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+print("[AimCore] VoidSpam loaded | 14-15B studs | Auto-Execute ACTIVE")
+print("[AimCore] Execute ONCE — persists through every Rivals match teleport.")
